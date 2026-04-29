@@ -326,7 +326,7 @@
         // ============================================================
         //  GOOGLE SHEETS CONFIG
         // ============================================================
-        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz81pj6ns4lOpyQ6PMDy0_S_u4Ehezk1FZt3roNYFqjphm9hx2qFaHADvs8uIxWCca0/exec';
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx2_T6x--qrGch9QAulBhNvsneA2fvoeE12eL02ROoxcMYL_TQjSGSndoSKsZvtRQZY/exec';
 
         // ============================================================
         //  STATIC DATA
@@ -1098,56 +1098,123 @@
                 <div class="screen active" style="text-align:center;padding:80px 40px;">
                     <div style="font-size:64px;margin-bottom:24px;">💾</div>
                     <h2 style="font-size:28px;margin-bottom:16px;">Salvando seus dados...</h2>
-                    <p style="color:#6b7280;font-size:16px;">Aguarde um momento enquanto registramos suas informações</p>
+                    <p style="color:#6b7280;font-size:16px;" id="save-status">Criando seu perfil...</p>
                 </div>`;
 
-            // ✅ FIX: All field names now match the actual userData object
-            const dataToSave = {
-                userName:           userData.ownerName          || '',   // ✅ was userData.name
-                userEmail:          userData.email              || '',   // ✅ graceful empty
-                dogName:            userData.dogName            || '',
-                dogAge:             userData.age                || '',   // ✅ was userData.dogAge
-                dogBreed:           userData.breed              || '',
-                dogProblem:         userData.problem            || '',
-                details:            userData.details            || '',
-                learningStyle:      userData.learningStyle      || 'Não informado',
-                weeklyHours:        userData.weeklyHours        || 'Não informado',
-                schedulePreference: userData.schedulePreference || 'Não informado',
-                preferredDays:      userData.preferredDays      || 'Não informado',
-                preferredTime:      userData.preferredTime      || 'Não informado',
-                assessmentResults: {
-                    scorePoints:       flowData.assessment.score,
-                    maxPoints:         flowData.assessment.maxScore,
-                    scorePercentage:   flowData.assessment.percentage,
-                    level:             flowData.assessment.level,
-                    block1Correct:     flowData.assessment.block1Correct,
-                    wrongCount:        wrongAnswers.length,
-                    recommendedCourse: `${userData.problem || 'Geral'} - ${flowData.assessment.level}`
-                },
-                // ✅ FIX: use assessmentAnswers (was assessmentHistory which didn't exist)
-                assessmentAnswers: assessmentAnswers.map(a => ({
-                    questionId:     a.questionId,
-                    questionText:   a.questionText,
-                    userAnswer:     a.selectedAnswer,
-                    correctAnswer:  a.correctAnswer,
-                    isCorrect:      a.isCorrect,
-                    block:          a.block,
-                    difficulty:     a.difficulty,
-                    answeredAt:     a.answeredAt
-                })),
-                submittedAt: new Date().toISOString()
-            };
-
-            console.log('[PetGenius] Submitting to DB:', dataToSave);
-
-            try {
-                await fetch(GOOGLE_SCRIPT_URL, {
+            // ✅ Helper: send one action to Apps Script
+            async function post(action, table, row) {
+                return fetch(GOOGLE_SCRIPT_URL, {
                     method: 'POST',
                     mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(dataToSave)
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: JSON.stringify({ action, data: { table, row }, timestamp: new Date().toISOString() })
                 });
+            }
+
+            function setStatus(msg) {
+                const el = document.getElementById('save-status');
+                if (el) el.textContent = msg;
+            }
+
+            const uid  = () => 'pg_' + Date.now() + '_' + Math.random().toString(36).substr(2,8);
+            const now  = () => new Date().toISOString();
+            const userId = uid();
+            const dogId  = uid();
+            const assessmentId = uid();
+
+            try {
+                // ── 1. USERS ──────────────────────────────
+                setStatus('Salvando perfil do tutor...');
+                await post('insert_user', 'users', {
+                    id:             userId,
+                    email:          userData.email       || '',
+                    password_hash:  '',
+                    name:           userData.ownerName   || '',
+                    phone:          userData.phone        || '',
+                    created_at:     now(),
+                    updated_at:     now(),
+                    last_login_at:  now(),
+                    is_active:      true,
+                    email_verified: false
+                });
+
+                // ── 2. DOGS ───────────────────────────────
+                setStatus('Salvando dados do cão...');
+                await post('insert_dog', 'dogs', {
+                    id:                  dogId,
+                    user_id:             userId,
+                    name:                userData.dogName  || '',
+                    age_range:           userData.age      || '',
+                    breed:               userData.breed    || '',
+                    primary_problem:     userData.problem  || '',
+                    secondary_problems:  '[]',
+                    created_at:          now(),
+                    updated_at:          now(),
+                    is_active:           true
+                });
+
+                // ── 3. USER PREFERENCES ───────────────────
+                setStatus('Salvando preferências de aprendizado...');
+                await post('insert_preferences', 'user_preferences', {
+                    user_id:             userId,
+                    weekly_hours:        userData.weeklyHours         || '',
+                    schedule_preference: userData.schedulePreference  || '',
+                    preferred_days:      userData.preferredDays       || '',
+                    learning_style:      userData.learningStyle       || '',
+                    notification_enabled: true,
+                    email_notifications:  true,
+                    created_at:          now(),
+                    updated_at:          now()
+                });
+
+                // ── 4. ASSESSMENT RESULTS ─────────────────
+                setStatus('Salvando resultado do nivelamento...');
+                await post('insert_assessment_result', 'assessment_results', {
+                    id:                assessmentId,
+                    user_id:           userId,
+                    total_questions:   assessmentQuestions.length,
+                    total_correct:     flowData.assessment.block1Correct,
+                    score_percentage:  flowData.assessment.percentage,
+                    calculated_level:  flowData.assessment.level,
+                    recommended_course: `${userData.problem || 'Geral'} - ${flowData.assessment.level}`,
+                    time_spent_seconds: 0,
+                    completed_at:      now()
+                });
+
+                // ── 5. ASSESSMENT ANSWERS ─────────────────
+                setStatus('Salvando respostas do quiz...');
+                await post('insert_assessment_answers', 'assessment_answers', {
+                    rows: assessmentAnswers.map(a => ({
+                        id:                   uid(),
+                        assessment_result_id: assessmentId,
+                        question_id:          `q_${a.questionId}`,
+                        question_text:        a.questionText,
+                        user_answer:          a.selectedAnswer,
+                        correct_answer:       a.correctAnswer,
+                        is_correct:           a.isCorrect,
+                        block_number:         a.block,
+                        difficulty:           a.difficulty,
+                        answered_at:          a.answeredAt
+                    }))
+                });
+
+                // ── 6. ACTIVITY LOG ───────────────────────
+                setStatus('Finalizando...');
+                await post('insert_activity', 'activity_log', {
+                    id:          uid(),
+                    user_id:     userId,
+                    action:      'flow_completed',
+                    entity_type: 'assessment',
+                    entity_id:   assessmentId,
+                    metadata:    JSON.stringify({ level: flowData.assessment.level, score: flowData.assessment.percentage }),
+                    ip_address:  '',
+                    user_agent:  navigator.userAgent.substring(0, 200),
+                    created_at:  now()
+                });
+
+                console.log('[PetGenius] ✅ All tables saved. userId:', userId);
                 showSuccessScreen(flowData);
+
             } catch (error) {
                 console.error('[PetGenius] DB Error:', error);
                 container.innerHTML = `
@@ -1157,14 +1224,13 @@
                         <p style="color:#6b7280;font-size:16px;margin-bottom:32px;">${error.message}</p>
                         <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
                             <button class="next-btn" onclick="startCourse()">🔄 Tentar Novamente</button>
-                            <button class="next-btn" style="background:#6b7280;" onclick="showSuccessScreen(${JSON.stringify(flowData).replace(/"/g, '&quot;')})">Continuar Sem Salvar</button>
+                            <button class="next-btn" style="background:#6b7280;" onclick="showSuccessScreen({assessment:{percentage:0,level:'—'}})">Continuar Sem Salvar</button>
                         </div>
                         <div style="margin-top:32px;padding:20px;background:#fef3c7;border-radius:12px;text-align:left;">
-                            <strong style="color:#92400e;display:block;margin-bottom:8px;">💡 Dados no console do navegador:</strong>
-                            <p style="color:#78350f;font-size:14px;">Pressione F12 para ver os dados salvos localmente.</p>
+                            <strong style="color:#92400e;display:block;margin-bottom:8px;">💡 Dados no console (F12):</strong>
+                            <p style="color:#78350f;font-size:14px;">userId: ${userId}</p>
                         </div>
                     </div>`;
-                console.log('=== PETGENIUS DADOS ===', JSON.stringify(dataToSave, null, 2));
             }
         }
 
